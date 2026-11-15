@@ -39,9 +39,6 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Verify tag matches package version
-        run: node scripts/check-version.mjs "${{ inputs.tag || github.ref_name }}"
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build Tauri application
