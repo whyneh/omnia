@@ -1,0 +1,76 @@
+name: Release
+
+# 打上 v* 标签即自动构建 Windows 产物并发布 Release。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的标签，例如 v1.0.0"
+        required: true
+        default: "v1.0.0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Build & publish (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Verify tag matches package version
+        run: node scripts/check-version.mjs "${{ inputs.tag || github.ref_name }}"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build Tauri application
+        run: pnpm tauri build
+
+      - name: Assemble release assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Copy-Item src-tauri/target/release/omnia.exe release-assets/Omnia.exe
+          Compress-Archive -Path release-assets/Omnia.exe -DestinationPath release-assets/Omnia-windows-x64-portable.zip -Force
+          $installer = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter *.exe -ErrorAction SilentlyContinue
+          if ($installer) {
+            foreach ($file in $installer) { Copy-Item $file.FullName release-assets/ }
+          } else {
+            Write-Host "No NSIS installer produced; publishing portable exe only."
+          }
+          Get-ChildItem release-assets | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omnia-windows-x64
+          path: release-assets/*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: Omnia ${{ inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/*

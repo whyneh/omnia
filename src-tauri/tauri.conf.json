@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Omnia",
+  "version": "1.0.0",
+  "identifier": "dev.omnia.app",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Omnia",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1080,
+        "minHeight": 560,
+        "decorations": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "whyneh",
+    "category": "DeveloperTool",
+    "shortDescription": "跨 agent 会话检索工具",
+    "longDescription": "Omnia 把本机多个 CLI coding agent 的会话、Skill、命令与指令汇入一个可搜索的只读视图。",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ]
+  }
+}

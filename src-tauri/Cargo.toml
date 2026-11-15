@@ -1,0 +1,28 @@
+[package]
+name = "omnia"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+name = "omnia_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+glob = "0.3"
+dirs = "5"
+dunce = "1"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "s"

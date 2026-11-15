@@ -1,0 +1,51 @@
+# ============================================================
+# Omnia — 入库边界
+# 原则：只提交「源码 + 构建所需配置 + 锁文件 + 文档」。
+# 凡是能由命令重新生成、或只在本地产生的文件，一律不入库。
+# ============================================================
+
+# --- 依赖 ---
+node_modules/
+.pnpm-store/
+
+# --- 前端构建产物 ---
+dist/
+.vite/
+*.tsbuildinfo
+
+# --- Rust / Tauri 构建产物 ---
+src-tauri/target/
+src-tauri/gen/
+**/*.rs.bk
+
+# --- 本地预览、设计与浏览器测试的一次性产物 ---
+preview.html
+.playwright-cli/
+.impeccable/
+
+# 根目录的视觉走查截图；正式文档图片请放 docs/
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
+*.log
+
+# --- 本地打包产物（发布物由 CI 生成并上传到 GitHub Release） ---
+/release-assets/
+*.exe
+*.msi
+*.zip
+*.pdb
+
+# --- 本地环境、编辑器与助手数据 ---
+.workbuddy-ai/
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
+desktop.ini
