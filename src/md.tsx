@@ -26,7 +26,22 @@ export function splitFrontmatter(text: string): { fm: [string, string][]; body: 
 export function Markdown({ text, className }: { text: string; className?: string }) {
   const html = useMemo(() => {
     const raw = marked.parse(text, { async: false }) as string;
-    return DOMPurify.sanitize(raw, { FORBID_TAGS: ["style", "form", "input", "iframe"] });
+    const safe = DOMPurify.sanitize(raw, {
+      FORBID_TAGS: ["style", "form", "input", "iframe"],
+      RETURN_DOM_FRAGMENT: true,
+    });
+    const content = document.createElement("div");
+    content.append(safe);
+    for (const table of content.querySelectorAll("table")) {
+      const scroll = document.createElement("div");
+      scroll.className = "md-table-scroll";
+      scroll.tabIndex = 0;
+      scroll.setAttribute("role", "region");
+      scroll.setAttribute("aria-label", "表格（可横向滚动）");
+      table.replaceWith(scroll);
+      scroll.append(table);
+    }
+    return content.innerHTML;
   }, [text]);
   return <div className={`md ${className ?? ""}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }

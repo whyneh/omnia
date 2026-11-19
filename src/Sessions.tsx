@@ -1,8 +1,17 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Agent, Msg, SessionPage, SessionRow, api, errText, fmtClock, fmtRange, fmtSize, fmtTime, resumeCommand, shortPath } from "./api";
+import { groupMsgs } from "./conversation";
 import { Markdown } from "./md";
 import { AgentIcon, IconChevron, IconCopy, IconEye, IconEyeOff, IconFolder, IconInfo, IconTool, IconUser, TINT } from "./icons";
+import type { ModelDisplay } from "./prefs";
+
+interface ReadingOptions {
+  showMetaDefault: boolean;
+  expandDefault: boolean;
+  modelDisplay: ModelDisplay;
+  collapseLongMessages: boolean;
+}
 
 const PAGE = 200;
 
@@ -27,9 +36,8 @@ export function Sessions({
   query,
   project,
   onCount,
-  showMetaDefault,
-  expandDefault,
-}: {
+  ...reading
+}: ReadingOptions & {
   agents: Agent[];
   version: number;
   toast: (s: string) => void;
@@ -37,8 +45,6 @@ export function Sessions({
   /** Folder filter from the sidebar; null means every project. */
   project: string | null;
   onCount: (n: number) => void;
-  showMetaDefault: boolean;
-  expandDefault: boolean;
 }) {
   const [rows, setRows] = useState<SessionRow[]>([]);
   const [sel, setSel] = useState<SessionRow | null>(null);
@@ -163,8 +169,7 @@ export function Sessions({
             row={active}
             agent={selAgent}
             toast={toast}
-            showMetaDefault={showMetaDefault}
-            expandDefault={expandDefault}
+            {...reading}
           />
         ) : (
           <div className="empty" style={{ margin: "auto" }}>
@@ -182,58 +187,6 @@ function highlight(s: string) {
   );
 }
 
-/* ------------------------------------------------------------------
-   Conversation model.
-
-   A block is one visible chat message. User text always starts its own block;
-   everything else (assistant text, thinking, tool calls, results) is absorbed
-   into the assistant block that precedes it. Inside an assistant block we keep
-   the original order and split it into alternating text / process segments,
-   so a reply that runs "answer → tool → tool → answer" reads like a chat UI
-   instead of dumping every tool call at the end.
-   ------------------------------------------------------------------ */
-
-interface Seg {
-  kind: "text" | "process";
-  parts: Msg[];
-  id: string;
-}
-
-interface Block {
-  role: "user" | "assistant" | "system";
-  parts: Msg[];
-  segs: Seg[];
-  id: string;
-}
-
-function groupMsgs(msgs: Msg[], showMeta: boolean): Block[] {
-  const out: Block[] = [];
-  for (const m of msgs) {
-    if (m.kind === "meta") {
-      if (showMeta) out.push({ role: "system", parts: [m], segs: [], id: `b${out.length}` });
-      continue;
-    }
-    if (m.kind === "text" && m.role === "user") {
-      const id = `b${out.length}`;
-      out.push({ role: "user", parts: [m], segs: [{ kind: "text", parts: [m], id: `${id}-s0` }], id });
-      continue;
-    }
-    const last = out[out.length - 1];
-    if (last && last.role === "assistant") last.parts.push(m);
-    else out.push({ role: "assistant", parts: [m], segs: [], id: `b${out.length}` });
-  }
-  for (const b of out) {
-    if (b.role !== "assistant") continue;
-    for (const m of b.parts) {
-      const kind: Seg["kind"] = m.kind === "text" ? "text" : "process";
-      const last = b.segs[b.segs.length - 1];
-      if (last && last.kind === kind) last.parts.push(m);
-      else b.segs.push({ kind, parts: [m], id: `${b.id}-s${b.segs.length}` });
-    }
-  }
-  return out;
-}
-
 const STEP_LABEL: Record<string, string> = {
   tool_call: "工具调用",
   tool_result: "结果",
@@ -248,12 +201,12 @@ function SessionView({
   toast,
   showMetaDefault,
   expandDefault,
-}: {
+  modelDisplay,
+  collapseLongMessages,
+}: ReadingOptions & {
   row: SessionRow;
   agent: Agent;
   toast: (s: string) => void;
-  showMetaDefault: boolean;
-  expandDefault: boolean;
 }) {
   const [page, setPage] = useState<SessionPage | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -263,8 +216,13 @@ function SessionView({
   // A process segment is hidden unless it is opened. `allProcess` flips the
   // default; `overrides` holds the segments the user toggled away from it.
   const [allProcess, setAllProcess] = useState(false);
-  const [overrides, setOverrides] = useState<Set<string>>(() => new Set());
+  const [overrides, setOverrides] = useState<Set<number>>(() => new Set());
   const busy = useRef(false);
+  const blocks = useMemo(() => groupMsgs(msgs, showMeta), [msgs, showMeta]);
+  const processCount = useMemo(
+    () => blocks.reduce((n, b) => n + b.parts.filter((p) => p.kind !== "text" && p.kind !== "meta").length, 0),
+    [blocks],
+  );
 
   // Settings changes should reach a view that is already mounted.
   useEffect(() => setShowMeta(showMetaDefault), [showMetaDefault]);
@@ -291,13 +249,8 @@ function SessionView({
 
   const m = page.meta;
   const resume = resumeCommand(agent.type, m.session_id, m.cwd);
-  const blocks = groupMsgs(msgs, showMeta);
-  const processCount = blocks.reduce(
-    (n, b) => n + b.segs.reduce((x, s) => x + (s.kind === "process" ? s.parts.length : 0), 0),
-    0,
-  );
-  const isOpen = (id: string) => (allProcess ? !overrides.has(id) : overrides.has(id));
-  const toggleSeg = (id: string) =>
+  const isOpen = (id: number) => (allProcess ? !overrides.has(id) : overrides.has(id));
+  const toggleSeg = (id: number) =>
     setOverrides((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -320,17 +273,13 @@ function SessionView({
               <code>{m.cwd}</code>
             </span>
           )}
-          {m.model && (
-            <>
-              <span className="sep" />
-              <span className="mi">
-                <code>{m.model}</code>
-              </span>
-            </>
+          {modelDisplay !== "hidden" && m.model && (
+            <span className="mi session-model">
+              <span>最近记录模型</span>
+              <ModelBadge model={m.model} />
+            </span>
           )}
-          <span className="sep" />
-          <span>{fmtRange(m.started, m.updated)}</span>
-          <span className="sep" />
+          {(m.started || m.updated) && <span>{fmtRange(m.started, m.updated)}</span>}
           <span>
             {fmtSize(row.size)} · {page.total} 条
           </span>
@@ -388,7 +337,7 @@ function SessionView({
           const user = b.role === "user";
           const bubbleRole: "user" | "assistant" = user ? "user" : "assistant";
           const stamp = b.parts.find((p) => p.ts)?.ts;
-          const plain = b.parts.filter((p) => p.kind === "text").map((p) => p.text).join("\n\n");
+          const hasText = b.segs.some((s) => s.kind === "text");
           return (
             <div className={`msg ${user ? "user" : "agent"}`} key={b.id}>
               <div className={`mav ${user ? "u" : "a"}`} style={user ? undefined : { ["--c" as string]: TINT[agent.type] }}>
@@ -398,14 +347,21 @@ function SessionView({
                 <div className="mhead">
                   <span className="mname">{user ? "你" : agent.name}</span>
                   {stamp && <span className="mtime">{fmtTime(stamp)}</span>}
-                  {!user && m.model && <span className="mchip">{m.model}</span>}
-                  <button className="mcopy" title="复制这条消息" onClick={() => copy(plain, "消息")}>
-                    <IconCopy />
-                  </button>
+                  {modelDisplay === "all" && b.model && <ModelBadge model={b.model} />}
+                  {hasText && (
+                    <button
+                      className="mcopy"
+                      title="复制这条消息"
+                      aria-label="复制这条消息"
+                      onClick={() => copy(b.parts.filter((p) => p.kind === "text").map((p) => p.text).join("\n\n"), "消息")}
+                    >
+                      <IconCopy />
+                    </button>
+                  )}
                 </div>
                 {b.segs.map((s) =>
                   s.kind === "text" ? (
-                    <Bubble key={s.id} role={bubbleRole} parts={s.parts} />
+                    <Bubble key={s.id} role={bubbleRole} parts={s.parts} collapseLong={collapseLongMessages} />
                   ) : (
                     <Process
                       key={s.id}
@@ -431,32 +387,61 @@ function SessionView({
   );
 }
 
-/** A chat bubble. Long messages collapse to a readable height with a toggle. */
-function Bubble({ role, parts }: { role: "user" | "assistant"; parts: Msg[] }) {
+function ModelBadge({ model }: { model: string }) {
+  return <span className="mchip" title={model}>{model}</span>;
+}
+
+const PREVIEW_HEIGHT = 268;
+
+/** Measure the rendered content, so short Markdown with tables/code and narrow layouts fold correctly. */
+const Bubble = memo(function Bubble({ role, parts, collapseLong }: {
+  role: "user" | "assistant";
+  parts: Msg[];
+  collapseLong: boolean;
+}) {
   const [full, setFull] = useState(false);
-  const text = parts.map((p) => p.text).join("\n\n");
-  const long = text.length > 900 || text.split("\n").length > 20;
-  const clamped = long && !full;
+  const [tall, setTall] = useState(false);
+  const content = useRef<HTMLDivElement>(null);
+  const id = useId();
+  useLayoutEffect(() => {
+    const el = content.current;
+    if (!el || !collapseLong) return;
+    const measure = () => setTall(el.scrollHeight > PREVIEW_HEIGHT);
+    const observer = new ResizeObserver(measure);
+    measure();
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [collapseLong]);
+
+  const collapsible = collapseLong && tall;
+  const clamped = collapsible && !full;
   return (
     <>
-      <div className={`bubble ${role} ${clamped ? "clamp" : ""}`}>
-        {role === "user"
-          ? parts.map((p, i) => (
-              <div className="utext" key={i}>
-                {p.text}
-              </div>
-            ))
-          : parts.map((p, i) => <Markdown key={i} text={p.text} />)}
+      <div
+        id={id}
+        className={`bubble ${role} ${clamped ? "clamp" : ""}`}
+        style={clamped ? { maxHeight: PREVIEW_HEIGHT } : undefined}
+      >
+        <div className="bubble-content" ref={content} inert={clamped || undefined}>
+          {role === "user"
+            ? parts.map((p, i) => <div className="utext" key={i}>{p.text}</div>)
+            : parts.map((p, i) => <Markdown key={i} text={p.text} />)}
+        </div>
       </div>
-      {long && (
-        <button className={`fullbtn ${full ? "up" : ""}`} onClick={() => setFull((v) => !v)}>
+      {collapsible && (
+        <button
+          className={`fullbtn ${full ? "up" : ""}`}
+          aria-expanded={full}
+          aria-controls={id}
+          onClick={() => setFull((v) => !v)}
+        >
           {full ? "收起" : "展开全文"}
           <IconChevron />
         </button>
       )}
     </>
   );
-}
+});
 
 /** Hidden-by-default process trace (thinking / tool calls / results). */
 function Process({

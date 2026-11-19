@@ -193,16 +193,12 @@ export default function App() {
   };
 
   const onRemove = async (a: Agent) => {
-    try {
-      await api.removeAgent(a.id);
-      setAgents(agents.filter((x) => x.id !== a.id));
-      setEditing(null);
-      setCurrent(ALL);
-      setVersion((v) => v + 1);
-      toast(`已移除 ${a.name}（磁盘文件未改动）`);
-    } catch (e) {
-      toast(errText(e));
-    }
+    await api.removeAgent(a.id);
+    setAgents((list) => list.filter((x) => x.id !== a.id));
+    setEditing(null);
+    setCurrent(ALL);
+    setVersion((v) => v + 1);
+    toast(`已移除 ${a.name}（磁盘文件未改动）`);
   };
 
   const viewStyle = (k: Category) => ({ display: tab === k ? "flex" : "none" });
@@ -231,6 +227,8 @@ export default function App() {
             onCount={(n) => report("sessions", n)}
             showMetaDefault={prefs.showMeta}
             expandDefault={prefs.expandTools}
+            modelDisplay={prefs.modelDisplay}
+            collapseLongMessages={prefs.collapseLongMessages}
           />
         </div>
       )}
@@ -337,34 +335,24 @@ export default function App() {
                 全部
               </button>
               {agents.map((a) => (
-                <button
-                  key={a.id}
-                  data-agent={a.id}
-                  className={`chip ${current === a.id ? "on" : ""} ${a.enabled ? "" : "off"}`}
-                  onClick={() => setCurrent(a.id)}
-                  title={`${KIND_LABEL[a.type]} · ${a.root}`}
-                >
-                  <AgentIcon kind={a.type} className="ico" />
-                  {a.name}
-                  {/* Editing only exists for the agent you are looking at, so the
-                      gear appears there and nowhere else. */}
+                <div key={a.id} className={`chip-source ${current === a.id ? "on" : ""}`}>
+                  <button
+                    data-agent={a.id}
+                    className={`chip ${current === a.id ? "on" : ""} ${a.enabled ? "" : "off"}`}
+                    onClick={() => setCurrent(a.id)}
+                    title={`${KIND_LABEL[a.type]} · ${a.root}`}
+                  >
+                    <AgentIcon kind={a.type} className="ico" />
+                    {a.name}
+                  </button>
                   {current === a.id && (
-                    <span
-                      className="chip-gear"
-                      role="button"
-                      tabIndex={-1}
-                      title="编辑这个 agent 的路径"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditing(a);
-                      }}
-                    >
+                    <button className="chip-gear" title={`编辑 ${a.name} 的数据目录`} aria-label={`编辑 ${a.name} 的数据目录`} onClick={() => setEditing(a)}>
                       <IconGear />
-                    </span>
+                    </button>
                   )}
-                </button>
+                </div>
               ))}
-              <button className="chip add" data-add-agent title="添加 agent" onClick={() => setEditing("new")}>
+              <button className="chip add" data-add-agent title="添加 Agent 数据目录" aria-label="添加 Agent 数据目录" onClick={() => setEditing("new")}>
                 <IconPlus />
               </button>
             </div>
@@ -381,6 +369,7 @@ export default function App() {
       {editing && (
         <AgentForm
           initial={editing === "new" ? null : editing}
+          agents={agents}
           onSaved={onSaved}
           onRemove={onRemove}
           onClose={() => setEditing(null)}

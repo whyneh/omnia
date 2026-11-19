@@ -12,11 +12,14 @@ pub struct Msg {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ts: Option<String>,
+    /// Model attributed to this rendered unit by the source, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl Msg {
     pub fn new(role: &str, kind: &str, text: impl Into<String>) -> Self {
-        Msg { role: role.into(), kind: kind.into(), text: text.into(), name: None, ts: None }
+        Msg { role: role.into(), kind: kind.into(), text: text.into(), name: None, ts: None, model: None }
     }
     pub fn named(mut self, name: Option<String>) -> Self {
         self.name = name;
@@ -26,6 +29,12 @@ impl Msg {
         self.ts = ts;
         self
     }
+    pub(crate) fn with_model(mut self, model: Option<&str>) -> Self {
+        if self.role == "assistant" {
+            self.model = model.map(str::to_owned);
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -33,6 +42,7 @@ pub struct SessionMeta {
     pub session_id: Option<String>,
     pub title: Option<String>,
     pub cwd: Option<String>,
+    /// Last known model in source order, for session summaries only.
     pub model: Option<String>,
     pub started: Option<String>,
     pub updated: Option<String>,
@@ -114,4 +124,23 @@ pub struct SessionPage {
     pub total: usize,
     pub offset: usize,
     pub msgs: Vec<Msg>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Msg;
+    use serde_json::json;
+
+    #[test]
+    fn message_model_is_optional_in_json() {
+        let old = json!({"role": "assistant", "kind": "text", "text": "Hello"});
+        let msg: Msg = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(msg.model, None);
+        assert_eq!(serde_json::to_value(&msg).unwrap(), old);
+
+        let attributed = msg.with_model(Some("model-a"));
+        let encoded = serde_json::to_value(&attributed).unwrap();
+        assert_eq!(encoded["model"], json!("model-a"));
+        assert_eq!(serde_json::from_value::<Msg>(encoded).unwrap(), attributed);
+    }
 }

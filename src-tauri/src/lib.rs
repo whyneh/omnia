@@ -10,7 +10,8 @@ use model::{SessionPage, SessionRow};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::Path;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
@@ -46,25 +47,68 @@ fn get_config(st: State<AppState>) -> ConfigView {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct Detected {
+    root: String,
     kind: String,
     name: String,
     paths: Paths,
 }
 
+fn folder_path(input: &str, home_dir: impl FnOnce() -> Option<PathBuf>) -> R<PathBuf> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("请输入文件夹路径".into());
+    }
+    if input.contains('\0') {
+        return Err("文件夹路径无效".into());
+    }
+    if let Some(suffix) = input
+        .strip_prefix("~/")
+        .or_else(|| input.strip_prefix("~\\"))
+        .or_else(|| (input == "~").then_some(""))
+    {
+        let relative = suffix.trim_start_matches(['/', '\\']).replace('\\', "/");
+        let relative = Path::new(&relative);
+        if matches!(relative.components().next(), Some(std::path::Component::Prefix(_))) {
+            return Err("文件夹路径无效".into());
+        }
+        return Ok(home_dir().ok_or("无法确定用户主目录")?.join(relative));
+    }
+    let path = Path::new(input);
+    if !path.is_absolute() {
+        return Err("请输入绝对文件夹路径，或使用 ~ 表示用户主目录".into());
+    }
+    Ok(path.to_path_buf())
+}
+
 #[tauri::command]
 fn detect_folder(root: String) -> R<Detected> {
-    let p = Path::new(&root);
-    if !p.is_dir() {
-        return Err("文件夹不存在".into());
+    let requested = folder_path(&root, dirs::home_dir)?;
+    match std::fs::metadata(&requested) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Err("所选路径不是文件夹".into()),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Err("文件夹不存在".into()),
+        Err(e) if e.kind() == ErrorKind::NotADirectory => return Err("所选路径不是文件夹".into()),
+        Err(e) => return Err(format!("无法访问文件夹：{e}")),
     }
-    let kind = config::detect_kind(p);
-    let name = match kind.as_str() {
-        "generic" => p.file_name().map(|n| n.to_string_lossy().trim_start_matches('.').to_string()).unwrap_or_else(|| "Agent".into()),
-        k => config::default_name(k).to_string(),
+    let canonical = guard::canon(&requested).ok_or("无法解析文件夹路径")?;
+    let kind = config::detect_kind(&canonical, &requested);
+    let name = if kind == "generic" {
+        requested
+            .file_name()
+            .map(|name| name.to_string_lossy().trim_start_matches('.').trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| config::default_name(kind).into())
+    } else {
+        config::default_name(kind).into()
     };
-    Ok(Detected { paths: config::default_paths(&kind), kind, name })
+    Ok(Detected {
+        root: guard::display(&canonical),
+        kind: kind.into(),
+        name,
+        paths: config::default_paths(kind),
+    })
 }
 
 #[tauri::command]
@@ -289,6 +333,95 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running omnia");
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("omnia-detect-{}-{stamp}", std::process::id()));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn expands_home_and_rejects_invalid_input() {
+        let home = std::env::temp_dir();
+        assert_eq!(folder_path(" ~ ", || Some(home.clone())).unwrap(), home);
+        for input in [" ~/.codex/sessions ", r" ~\.codex\sessions "] {
+            assert_eq!(
+                folder_path(input, || Some(home.clone())).unwrap(),
+                home.join(".codex/sessions")
+            );
+        }
+        assert!(folder_path("~", || None).is_err());
+        for input in [" ", ".codex", "~other/.codex", "\0"] {
+            assert!(folder_path(input, || Some(home.clone())).is_err());
+        }
+    }
+
+    #[test]
+    fn detects_fresh_folders_and_prefers_signatures() {
+        let tmp = TestDir::new();
+        for kind in ["claude", "codex", "gemini"] {
+            let root = tmp.0.join(format!(".{kind}"));
+            std::fs::create_dir(&root).unwrap();
+            let detected = detect_folder(format!("  {}  ", root.display())).unwrap();
+            assert_eq!(detected.kind, kind);
+            assert_eq!(detected.name, config::default_name(kind));
+            assert_eq!(detected.paths, config::default_paths(kind));
+            assert_eq!(detected.root, guard::display(&guard::canon(&root).unwrap()));
+        }
+        let root = tmp.0.join(".claude");
+        std::fs::write(root.join("config.toml"), "").unwrap();
+        std::fs::create_dir(root.join("sessions")).unwrap();
+        assert_eq!(detect_folder(root.to_str().unwrap().into()).unwrap().kind, "codex");
+    }
+
+    #[test]
+    fn names_generic_folders_and_distinguishes_path_errors() {
+        let tmp = TestDir::new();
+        let generic = tmp.0.join(".custom");
+        std::fs::create_dir(&generic).unwrap();
+        let detected = detect_folder(generic.to_str().unwrap().into()).unwrap();
+        assert_eq!(detected.kind, "generic");
+        assert_eq!(detected.name, "custom");
+
+        let file = tmp.0.join("file");
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(detect_folder(file.to_str().unwrap().into()).unwrap_err(), "所选路径不是文件夹");
+        let missing = tmp.0.join("missing");
+        assert_eq!(detect_folder(missing.to_str().unwrap().into()).unwrap_err(), "文件夹不存在");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detects_symlink_from_requested_name_and_returns_resolved_path() {
+        let tmp = TestDir::new();
+        let target = tmp.0.join("...");
+        std::fs::create_dir(&target).unwrap();
+        assert_eq!(detect_folder(target.to_str().unwrap().into()).unwrap().name, "Agent");
+        let alias = tmp.0.join(".gemini");
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        let detected = detect_folder(alias.to_str().unwrap().into()).unwrap();
+        assert_eq!(detected.kind, "gemini");
+        assert_eq!(detected.root, guard::display(&guard::canon(&target).unwrap()));
+    }
 }
 
 #[cfg(test)]

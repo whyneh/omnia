@@ -3,6 +3,13 @@
 export type StartTab = "sessions" | "skills" | "commands" | "instructions";
 const TABS: StartTab[] = ["sessions", "skills", "commands", "instructions"];
 
+export const MODEL_DISPLAY_OPTIONS = [
+  { value: "all", label: "会话与回复" },
+  { value: "overview", label: "仅会话概览" },
+  { value: "hidden", label: "隐藏" },
+] as const;
+export type ModelDisplay = (typeof MODEL_DISPLAY_OPTIONS)[number]["value"];
+
 export interface Prefs {
   /** Rebuild the session index when the window regains focus. */
   autoIndexOnFocus: boolean;
@@ -12,8 +19,11 @@ export interface Prefs {
   rememberScope: boolean;
   /** Session view: show system-injected messages by default. */
   showMeta: boolean;
-  /** Session view: expand tool calls by default. */
+  /** Session view: expand process details by default. */
   expandTools: boolean;
+  modelDisplay: ModelDisplay;
+  /** Collapse tall rendered messages instead of showing the full text immediately. */
+  collapseLongMessages: boolean;
 }
 
 export const DEFAULTS: Prefs = {
@@ -22,6 +32,8 @@ export const DEFAULTS: Prefs = {
   rememberScope: true,
   showMeta: false,
   expandTools: false,
+  modelDisplay: "all",
+  collapseLongMessages: true,
 };
 
 const PREFS_KEY = "omnia.prefs";
@@ -34,6 +46,8 @@ export function loadPrefs(): Prefs {
     const p = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Prefs>) };
     // Older builds could start on a view that no longer exists.
     if (!TABS.includes(p.startTab)) p.startTab = DEFAULTS.startTab;
+    if (!MODEL_DISPLAY_OPTIONS.some((o) => o.value === p.modelDisplay)) p.modelDisplay = DEFAULTS.modelDisplay;
+    if (typeof p.collapseLongMessages !== "boolean") p.collapseLongMessages = DEFAULTS.collapseLongMessages;
     return p;
   } catch {
     return DEFAULTS;

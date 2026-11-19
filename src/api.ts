@@ -19,6 +19,13 @@ export interface Agent {
   enabled: boolean;
 }
 
+export interface DetectedFolder {
+  root: string;
+  kind: Kind;
+  name: string;
+  paths: Paths;
+}
+
 export interface SessionRow {
   agent_id: string;
   path: string;
@@ -40,6 +47,8 @@ export interface Msg {
   text: string;
   name?: string;
   ts?: string;
+  /** Model recorded for this message, never inferred from the session summary. */
+  model?: string;
 }
 
 export interface SessionMeta {
@@ -84,7 +93,7 @@ export interface Stats {
 
 export const api = {
   getConfig: () => invoke<{ agents: Agent[]; warning: string | null; config_path: string }>("get_config"),
-  detectFolder: (root: string) => invoke<{ kind: Kind; name: string; paths: Paths }>("detect_folder", { root }),
+  detectFolder: (root: string) => invoke<DetectedFolder>("detect_folder", { root }),
   defaultPaths: (kind: Kind) => invoke<Paths>("default_paths", { kind }),
   previewPaths: (root: string, paths: Paths) => invoke<Record<Category, number>>("preview_paths", { root, paths }),
   saveAgent: (agent: Agent) => invoke<Agent>("save_agent", { agent }),

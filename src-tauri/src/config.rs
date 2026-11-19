@@ -87,18 +87,33 @@ pub fn default_name(kind: &str) -> &'static str {
     }
 }
 
-/// Guess the agent type from signature files in the folder.
-pub fn detect_kind(root: &Path) -> String {
+const STANDARD_ROOTS: [(&str, &str); 3] = [
+    (".claude", "claude"),
+    (".codex", "codex"),
+    (".gemini", "gemini"),
+];
+
+fn conventional_kind(root: &Path) -> Option<&'static str> {
+    let name = root.file_name()?.to_str()?;
+    STANDARD_ROOTS
+        .into_iter()
+        .find_map(|(dir, kind)| (name == dir).then_some(kind))
+}
+
+/// Guess from signature files first, then from the requested or resolved folder name.
+pub fn detect_kind(root: &Path, requested: &Path) -> &'static str {
     let has = |p: &str| root.join(p).exists();
     let is_dir = |p: &str| root.join(p).is_dir();
     if has("config.toml") && (is_dir("sessions") || has("AGENTS.md")) {
-        "codex".into()
+        "codex"
     } else if is_dir("projects") && (has("settings.json") || has("CLAUDE.md") || is_dir("todos")) {
-        "claude".into()
+        "claude"
     } else if is_dir("tmp") && (has("settings.json") || has("GEMINI.md")) {
-        "gemini".into()
+        "gemini"
     } else {
-        "generic".into()
+        conventional_kind(requested)
+            .or_else(|| conventional_kind(root))
+            .unwrap_or("generic")
     }
 }
 
@@ -140,7 +155,7 @@ pub fn load() -> (Config, Option<String>) {
 fn first_run() -> Config {
     let mut agents = vec![];
     if let Some(home) = dirs::home_dir() {
-        for (dir, kind) in [(".claude", "claude"), (".codex", "codex"), (".gemini", "gemini")] {
+        for (dir, kind) in STANDARD_ROOTS {
             let root = home.join(dir);
             if root.is_dir() {
                 agents.push(Agent {
